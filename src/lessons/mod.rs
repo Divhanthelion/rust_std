@@ -6,12 +6,37 @@
 
 use crate::lesson::{Lesson, Part};
 
+mod aggregates;
+mod bindings;
+mod borrowing;
+mod flow;
 mod hello;
+mod lifetimes;
+mod numbers;
+mod ownership;
+mod strings;
 
-pub static PARTS: &[Part] = &[Part {
-    title: "Part I — Foundations",
-    lessons: &[&hello::LESSON],
-}];
+pub static PARTS: &[Part] = &[
+    Part {
+        title: "Part I — Foundations",
+        lessons: &[
+            &hello::LESSON,
+            &bindings::LESSON,
+            &numbers::LESSON,
+            &aggregates::LESSON,
+            &flow::LESSON,
+        ],
+    },
+    Part {
+        title: "Part II — Ownership & borrowing",
+        lessons: &[
+            &ownership::LESSON,
+            &borrowing::LESSON,
+            &strings::LESSON,
+            &lifetimes::LESSON,
+        ],
+    },
+];
 
 /// Every lesson with its 1-based number, in course order.
 pub fn all() -> impl Iterator<Item = (usize, &'static Lesson)> {
