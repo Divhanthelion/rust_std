@@ -1,5 +1,10 @@
 //! The course. Each module is one lesson; `PARTS` fixes their order.
 
+// Demo structs are often only read through `{:?}`, which the dead-code lint
+// ignores, so it is silenced here. The tests at the bottom of this file do
+// its real job instead: every lesson file is registered, and every code
+// region is shown by some section.
+#![allow(dead_code)]
 // Lesson code demonstrates behaviour on literal values (`NaN == NaN`,
 // `f64::NAN as i32`, `Some(7).unwrap_or(0)`) and sometimes shows a less
 // idiomatic form next to the better one. Clippy rightly flags those in
@@ -9,18 +14,23 @@
     clippy::char_lit_as_u8,
     clippy::clone_on_copy,
     clippy::eq_op,
+    clippy::iter_nth,
     clippy::let_unit_value,
     clippy::manual_is_ascii_check,
+    clippy::manual_is_multiple_of,
     clippy::manual_range_patterns,
     clippy::needless_lifetimes,
+    clippy::needless_range_loop,
     clippy::print_literal,
     clippy::to_string_in_format_args,
     clippy::type_complexity,
+    clippy::unnecessary_fold,
     clippy::unnecessary_lazy_evaluations,
     clippy::unnecessary_literal_unwrap,
     clippy::unnecessary_min_or_max,
     clippy::useless_vec,
     clippy::vec_init_then_push,
+    clippy::while_let_on_iterator,
     clippy::zero_divided_by_zero
 )]
 
@@ -29,17 +39,22 @@ use crate::lesson::{Lesson, Part};
 mod aggregates;
 mod bindings;
 mod borrowing;
+mod closures;
 mod enums;
 mod errors;
 mod flow;
+mod generics;
 mod hello;
+mod iterators;
 mod lifetimes;
 mod numbers;
 mod option_result;
 mod ownership;
 mod patterns;
+mod std_traits;
 mod strings;
 mod structs;
+mod traits;
 
 pub static PARTS: &[Part] = &[
     Part {
@@ -69,6 +84,16 @@ pub static PARTS: &[Part] = &[
             &patterns::LESSON,
             &option_result::LESSON,
             &errors::LESSON,
+        ],
+    },
+    Part {
+        title: "Part IV — Abstraction",
+        lessons: &[
+            &generics::LESSON,
+            &traits::LESSON,
+            &std_traits::LESSON,
+            &closures::LESSON,
+            &iterators::LESSON,
         ],
     },
 ];
@@ -189,6 +214,38 @@ mod tests {
         assert_eq!(find(first.id).unwrap().0, n);
         assert!(find("0").is_err());
         assert!(find("no such lesson anywhere").is_err());
+    }
+
+    #[test]
+    fn every_lesson_file_is_registered() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/lessons");
+        let mut files: Vec<String> = std::fs::read_dir(dir)
+            .expect("read src/lessons")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".rs") && name != "mod.rs")
+            .collect();
+        files.sort();
+        let registered = all().count();
+        assert_eq!(
+            files.len(),
+            registered,
+            "lesson files {files:?} vs {registered} registered lessons"
+        );
+    }
+
+    #[test]
+    fn every_anchor_is_shown() {
+        for (_, lesson) in all() {
+            let used: HashSet<&str> = lesson.sections.iter().filter_map(|s| s.anchor).collect();
+            for anchor in snippet::anchors(lesson.source) {
+                assert!(
+                    used.contains(anchor),
+                    "{}: anchor `{anchor}` is never shown by a section",
+                    lesson.id
+                );
+            }
+        }
     }
 
     /// Every demo runs to completion without panicking.

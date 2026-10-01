@@ -504,27 +504,23 @@ fn layout() {
     // ANCHOR: layout
     use std::mem::{align_of, offset_of, size_of};
 
-    #[allow(dead_code)]
     struct RustLayout {
         a: u8,
         b: u32,
         c: u8,
     }
-    #[allow(dead_code)]
     #[repr(C)]
     struct CLayout {
         a: u8,  //  offset 0, then 3 bytes padding
         b: u32, // offset 4
         c: u8,  //  offset 8, then 3 bytes padding (size must be a multiple of 4)
     }
-    #[allow(dead_code)]
     #[repr(C, packed)]
     struct Packed {
         a: u8,
         b: u32,
         c: u8,
     }
-    #[allow(dead_code)]
     #[repr(transparent)]
     struct Wrapper(u32);
 

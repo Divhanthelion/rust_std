@@ -248,7 +248,10 @@ fn panics() {
     }
 
     let temps = [88.0, 90.5, 87.25];
-    assert!(temps.iter().all(|t: &f64| t.is_finite()), "sensor returned NaN/inf");
+    assert!(
+        temps.iter().all(|t: &f64| t.is_finite()),
+        "sensor returned NaN/inf"
+    );
     debug_assert_eq!(temps.len(), 3, "expected one reading per cylinder bank"); // debug only
     println!("assertions passed");
     // ANCHOR_END: panic

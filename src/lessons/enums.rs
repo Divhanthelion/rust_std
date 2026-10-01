@@ -410,18 +410,15 @@ fn sizes() {
     // ANCHOR: sizes
     use std::mem::size_of;
 
-    #[allow(dead_code)]
     enum Small {
         A(u8),
         B(u16),
     }
-    #[allow(dead_code)]
     #[allow(clippy::large_enum_variant)] // clippy flags exactly this problem
     enum Lopsided {
         Tiny(u8),
         Huge([u8; 1024]),
     }
-    #[allow(dead_code)]
     enum Boxed {
         Tiny(u8),
         Huge(Box<[u8; 1024]>),
