@@ -43,10 +43,13 @@ mod async_rust;
 mod atomics;
 mod bindings;
 mod borrowing;
+mod bytes_bits;
+mod can_frames;
 mod closures;
 mod collections;
 mod enums;
 mod errors;
+mod fixed_capacity;
 mod flow;
 mod generics;
 mod hello;
@@ -55,10 +58,13 @@ mod iterators;
 mod lifetimes;
 mod macros;
 mod modules;
+mod no_std;
 mod numbers;
 mod option_result;
 mod ownership;
+mod panic_free;
 mod patterns;
+mod safety_critical;
 mod smart_pointers;
 mod std_tour;
 mod std_traits;
@@ -67,6 +73,9 @@ mod structs;
 mod testing;
 mod threads;
 mod traits;
+mod typestate;
+mod unsafe_ffi;
+mod vehicle_patterns;
 
 pub static PARTS: &[Part] = &[
     Part {
@@ -127,6 +136,20 @@ pub static PARTS: &[Part] = &[
             &testing::LESSON,
             &advanced_types::LESSON,
             &async_rust::LESSON,
+        ],
+    },
+    Part {
+        title: "Part VII — Systems & automotive Rust",
+        lessons: &[
+            &bytes_bits::LESSON,
+            &can_frames::LESSON,
+            &fixed_capacity::LESSON,
+            &typestate::LESSON,
+            &panic_free::LESSON,
+            &unsafe_ffi::LESSON,
+            &no_std::LESSON,
+            &vehicle_patterns::LESSON,
+            &safety_critical::LESSON,
         ],
     },
 ];

@@ -10,6 +10,7 @@
 //! written to be read: argument parsing, a Markdown-ish renderer, a syntax
 //! highlighter, a PRNG, and file-based progress tracking, all with `std` only.
 
+pub mod alloc_counter;
 pub mod cli;
 pub mod console;
 pub mod lesson;
