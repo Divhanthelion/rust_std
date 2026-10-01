@@ -234,6 +234,7 @@ pub static LESSON: Lesson = Lesson {
 
 fn references() {
     // ANCHOR: refs
+    #[allow(clippy::ptr_arg)] // clippy prefers &str here; see the signatures section
     fn length(s: &String) -> usize {
         s.len() // auto-deref: no need to write (*s).len()
     }

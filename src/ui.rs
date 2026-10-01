@@ -170,11 +170,27 @@ fn split_items(block: &[&str], marker: &str) -> Vec<String> {
     items
 }
 
+/// Rustdoc convention: in Rust blocks, lines starting with `# ` are compiled
+/// (by the prose tests) but hidden from the reader.
+pub fn is_hidden_line(line: &str) -> bool {
+    let t = line.trim_start();
+    t == "#" || t.starts_with("# ")
+}
+
 fn render_fenced(info: &str, code: &str) -> String {
     let kind = info.split(',').next().unwrap_or("");
+    if matches!(kind, "text" | "output") {
+        return code_block(code, false);
+    }
+    let visible: Vec<&str> = code.lines().filter(|l| !is_hidden_line(l)).collect();
+    let code = &visible.join("\n");
     match kind {
         "compile_fail" => {
-            let codes: Vec<&str> = info.split(',').skip(1).collect();
+            let codes: Vec<&str> = info
+                .split(',')
+                .map(str::trim)
+                .filter(|c| c.starts_with('E'))
+                .collect();
             let label = if codes.is_empty() {
                 "✗ does not compile".to_string()
             } else {
@@ -182,7 +198,6 @@ fn render_fenced(info: &str, code: &str) -> String {
             };
             format!("{}\n{}", paint(&label, Style::Bad), code_block(code, true))
         }
-        "text" | "output" => code_block(code, false),
         _ => code_block(code, true),
     }
 }

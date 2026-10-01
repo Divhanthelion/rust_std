@@ -1,20 +1,45 @@
 //! The course. Each module is one lesson; `PARTS` fixes their order.
 
-// Lesson code sometimes shows a less idiomatic form on purpose, next to the
-// better one, so a few style lints are relaxed for the lessons only.
-#![allow(clippy::print_literal)]
+// Lesson code demonstrates behaviour on literal values (`NaN == NaN`,
+// `f64::NAN as i32`, `Some(7).unwrap_or(0)`) and sometimes shows a less
+// idiomatic form next to the better one. Clippy rightly flags those in
+// production code, so these lints are relaxed for the lessons only.
+#![allow(
+    clippy::cast_nan_to_int,
+    clippy::char_lit_as_u8,
+    clippy::clone_on_copy,
+    clippy::eq_op,
+    clippy::let_unit_value,
+    clippy::manual_is_ascii_check,
+    clippy::manual_range_patterns,
+    clippy::needless_lifetimes,
+    clippy::print_literal,
+    clippy::to_string_in_format_args,
+    clippy::type_complexity,
+    clippy::unnecessary_lazy_evaluations,
+    clippy::unnecessary_literal_unwrap,
+    clippy::unnecessary_min_or_max,
+    clippy::useless_vec,
+    clippy::vec_init_then_push,
+    clippy::zero_divided_by_zero
+)]
 
 use crate::lesson::{Lesson, Part};
 
 mod aggregates;
 mod bindings;
 mod borrowing;
+mod enums;
+mod errors;
 mod flow;
 mod hello;
 mod lifetimes;
 mod numbers;
+mod option_result;
 mod ownership;
+mod patterns;
 mod strings;
+mod structs;
 
 pub static PARTS: &[Part] = &[
     Part {
@@ -34,6 +59,16 @@ pub static PARTS: &[Part] = &[
             &borrowing::LESSON,
             &strings::LESSON,
             &lifetimes::LESSON,
+        ],
+    },
+    Part {
+        title: "Part III — Modeling data",
+        lessons: &[
+            &structs::LESSON,
+            &enums::LESSON,
+            &patterns::LESSON,
+            &option_result::LESSON,
+            &errors::LESSON,
         ],
     },
 ];

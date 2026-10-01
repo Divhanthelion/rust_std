@@ -37,6 +37,14 @@ fn fenced_blocks(origin: &str, text: &str) -> Vec<Example> {
             .by_ref()
             .take_while(|l| !l.trim_start().starts_with("```"))
             .collect();
+        // Rustdoc-style hidden lines (`# code`) are compiled but not shown.
+        let code: Vec<&str> = code
+            .iter()
+            .map(|l| match l.trim_start() {
+                "#" => "",
+                t => t.strip_prefix("# ").unwrap_or(l),
+            })
+            .collect();
         out.push(Example {
             origin: origin.to_string(),
             info: info.trim().to_string(),
