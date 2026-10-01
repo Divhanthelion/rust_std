@@ -302,6 +302,7 @@ fn scopes() {
     // ANCHOR_END: scopes
 }
 
+#[allow(clippy::needless_late_init)] // late initialization is the point of this demo
 fn deferred() {
     // ANCHOR: deferred
     let gear: &str; // declared, not yet initialized, and not `mut`

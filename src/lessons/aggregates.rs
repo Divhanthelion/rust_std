@@ -69,7 +69,8 @@ pub static LESSON: Lesson = Lesson {
             - `first`, `last`, `get`, `split_first`, `split_last` all return
               `Option`s, so they can't panic.
             - `split_at(mid)` divides one slice into two.
-            - `chunks(n)` and `chunks_exact(n)` split into pieces, and
+            - `chunks(n)` splits into pieces; `as_chunks::<N>()` (Rust 1.88+)
+              gives fixed-size `[T; N]` arrays plus the leftover tail; and
               `windows(n)` gives overlapping views.
             - `contains`, `starts_with`, `iter().position(...)`, and
               `binary_search` on sorted data.
@@ -153,7 +154,7 @@ pub static LESSON: Lesson = Lesson {
     ],
     exercises: &[
         "Write `fn min_max(values: &[i32]) -> Option<(i32, i32)>` that returns `None` for an empty slice. Destructure the result at the call site.",
-        "Given `[u8; 8]` representing a CAN payload, print it as hex bytes separated by spaces, then as two big-endian `u32`s using `chunks_exact(4)` and `try_into`.",
+        "Given `[u8; 8]` representing a CAN payload, print it as hex bytes separated by spaces, then as two big-endian `u32`s using `as_chunks::<4>()` and `u32::from_be_bytes`.",
         "Use `windows(3)` to compute a 3-point moving average over a slice of `f64` sensor readings.",
         "Write `fn rotate_right(data: &mut [i32], k: usize)` without allocating. Then compare with the built-in `rotate_right`.",
     ],
@@ -288,8 +289,8 @@ fn toolbox() {
     }
     println!();
 
-    let exact = frame.chunks_exact(3);
-    println!("chunks_exact remainder: {:?}", exact.remainder());
+    let (triples, rest) = frame.as_chunks::<3>(); // &[[u8; 3]] + leftover
+    println!("as_chunks::<3>: {triples:?} remainder {rest:?}");
 
     let rising = [1, 3, 4, 8, 9];
     let diffs: Vec<i32> = rising.windows(2).map(|w| w[1] - w[0]).collect();
