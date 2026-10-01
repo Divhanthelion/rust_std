@@ -37,23 +37,30 @@
 use crate::lesson::{Lesson, Part};
 
 mod aggregates;
+mod atomics;
 mod bindings;
 mod borrowing;
 mod closures;
+mod collections;
 mod enums;
 mod errors;
 mod flow;
 mod generics;
 mod hello;
+mod io;
 mod iterators;
 mod lifetimes;
+mod modules;
 mod numbers;
 mod option_result;
 mod ownership;
 mod patterns;
+mod smart_pointers;
+mod std_tour;
 mod std_traits;
 mod strings;
 mod structs;
+mod threads;
 mod traits;
 
 pub static PARTS: &[Part] = &[
@@ -94,6 +101,18 @@ pub static PARTS: &[Part] = &[
             &std_traits::LESSON,
             &closures::LESSON,
             &iterators::LESSON,
+        ],
+    },
+    Part {
+        title: "Part V — The standard library",
+        lessons: &[
+            &collections::LESSON,
+            &smart_pointers::LESSON,
+            &modules::LESSON,
+            &threads::LESSON,
+            &atomics::LESSON,
+            &io::LESSON,
+            &std_tour::LESSON,
         ],
     },
 ];

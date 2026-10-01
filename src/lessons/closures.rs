@@ -409,7 +409,10 @@ fn std_uses() {
     let mut by_letter: HashMap<char, Vec<&str>> = HashMap::new();
     for (name, _) in &parts {
         let first = name.chars().next().unwrap_or('?');
-        by_letter.entry(first).or_insert_with(|| Vec::with_capacity(4)).push(*name);
+        by_letter
+            .entry(first)
+            .or_insert_with(|| Vec::with_capacity(4))
+            .push(*name);
     }
     let mut keys: Vec<_> = by_letter.keys().collect();
     keys.sort();
