@@ -2,6 +2,7 @@
 
 use crate::console::Console;
 use crate::lesson::Question;
+use crate::rng::Rng;
 use crate::ui::{self, Style};
 
 pub struct Outcome {
@@ -12,8 +13,9 @@ pub struct Outcome {
 }
 
 /// Asks each question in turn. Answers are letters (`a`, `b`, …) or
-/// numbers (`1`, `2`, …); `q` stops early.
-pub fn run(questions: &[&Question], console: &mut Console) -> Outcome {
+/// numbers (`1`, `2`, …); `q` stops early. With an `rng`, the choices are
+/// shown in a random order so the position of the answer gives nothing away.
+pub fn run(questions: &[&Question], console: &mut Console, mut rng: Option<&mut Rng>) -> Outcome {
     let mut outcome = Outcome {
         correct: 0,
         answered: 0,
@@ -30,9 +32,14 @@ pub fn run(questions: &[&Question], console: &mut Console) -> Outcome {
             )
         );
         print!("{}", ui::render_prose(q.prompt));
-        for (i, choice) in q.choices.iter().enumerate() {
-            let label = format!("  {}) ", letter(i));
-            print!("{}", ui::wrap(choice, &label, "     "));
+        // `order[shown position] = original index`
+        let mut order: Vec<usize> = (0..q.choices.len()).collect();
+        if let Some(rng) = rng.as_mut() {
+            rng.shuffle(&mut order);
+        }
+        for (shown, &original) in order.iter().enumerate() {
+            let label = format!("  {}) ", letter(shown));
+            print!("{}", ui::wrap(q.choices[original], &label, "     "));
         }
 
         let choice = loop {
@@ -63,14 +70,18 @@ pub fn run(questions: &[&Question], console: &mut Console) -> Outcome {
         };
 
         outcome.answered += 1;
-        if choice == q.answer {
+        if order[choice] == q.answer {
             outcome.correct += 1;
             println!("{}", ui::paint("✓ Correct!", Style::Good));
         } else {
+            let shown = order
+                .iter()
+                .position(|&i| i == q.answer)
+                .unwrap_or(q.answer);
             println!(
                 "{} The answer is {}) {}",
                 ui::paint("✗ Not quite.", Style::Bad),
-                letter(q.answer),
+                letter(shown),
                 q.choices[q.answer]
             );
         }
@@ -106,6 +117,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shuffled_choices_still_score_correctly() {
+        static Q: Question = Question::new("pick c", &["a", "b", "c", "d"], 2, "");
+        for seed in 1..20 {
+            // Find where "c" will be shown for this seed, then answer that letter.
+            let mut order: Vec<usize> = (0..4).collect();
+            Rng::new(seed).shuffle(&mut order);
+            let shown = order.iter().position(|&i| i == 2).unwrap();
+            let reply = format!("{}\n", letter(shown));
+            let mut console = Console::from_reader(reply.as_bytes());
+            let outcome = run(&[&Q], &mut console, Some(&mut Rng::new(seed)));
+            assert_eq!(outcome.correct, 1, "seed {seed}");
+        }
+    }
+
+    #[test]
     fn parses_letters_and_numbers() {
         assert_eq!(parse_choice("a", 3), Some(0));
         assert_eq!(parse_choice("C", 3), Some(2));
@@ -120,7 +146,7 @@ mod tests {
     fn scripted_quiz() {
         static Q: Question = Question::new("1 + 1?", &["1", "2"], 1, "Arithmetic.");
         let mut console = Console::from_reader(&b"x\nb\n"[..]);
-        let outcome = run(&[&Q], &mut console);
+        let outcome = run(&[&Q], &mut console, None);
         assert_eq!(
             (outcome.correct, outcome.answered, outcome.quit),
             (1, 1, false)

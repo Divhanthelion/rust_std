@@ -45,6 +45,7 @@ mod bindings;
 mod borrowing;
 mod bytes_bits;
 mod can_frames;
+mod capstone;
 mod closures;
 mod collections;
 mod enums;
@@ -53,6 +54,7 @@ mod fixed_capacity;
 mod flow;
 mod generics;
 mod hello;
+mod interview;
 mod io;
 mod iterators;
 mod lifetimes;
@@ -151,6 +153,10 @@ pub static PARTS: &[Part] = &[
             &vehicle_patterns::LESSON,
             &safety_critical::LESSON,
         ],
+    },
+    Part {
+        title: "Part VIII — Career",
+        lessons: &[&interview::LESSON, &capstone::LESSON],
     },
 ];
 

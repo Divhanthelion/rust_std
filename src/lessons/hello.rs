@@ -228,7 +228,7 @@ pub static LESSON: Lesson = Lesson {
                 "println!(v.len())",
             ],
             1,
-            "Inline capture only accepts plain identifiers. Pass expressions as arguments. (The third compiles but prints the vector followed by the text `.len()`.)",
+            "Inline capture only accepts plain identifiers. Pass expressions as arguments. (`println!(\"{v}.len()\")` does compile, but prints the vector followed by the text `.len()`.)",
         ),
         Question::new(
             "What does `format!(\"{:#06x}\", 255)` produce?",

@@ -2,9 +2,9 @@
 name = "rust_std"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "Learn Rust using nothing but the standard library — an interactive CLI course."
-license = "MIT OR Apache-2.0"
+publish = false
 readme = "README.md"
 
 # Deliberately empty: everything in this course is built on `std` alone.

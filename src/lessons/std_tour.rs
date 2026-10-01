@@ -12,7 +12,7 @@ use crate::lesson::{Lesson, Question, Section};
 
 pub static LESSON: Lesson = Lesson {
     id: "std_tour",
-    title: "A tour of std: time, mem, cmp, hash, any",
+    title: "A tour of std",
     summary: "The smaller modules you reach for every week: std::time, std::mem, std::cmp, std::hash, std::any, std::num, std::ops ranges and std::hint.",
     source: include_str!("std_tour.rs"),
     sections: &[

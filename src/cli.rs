@@ -255,6 +255,12 @@ fn banner() {
 }
 
 fn list(progress: &Progress) {
+    // Pad titles to the longest one so the ids line up.
+    let title_width = lessons::all()
+        .map(|(_, l)| l.title.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
     let mut number = 0;
     for part in lessons::PARTS {
         println!();
@@ -272,7 +278,7 @@ fn list(progress: &Progress) {
                 .map(|(c, t)| ui::paint(&format!(" [quiz {c}/{t}]"), Style::Dim))
                 .unwrap_or_default();
             println!(
-                " {mark} {:>2}. {:<34}{}{quiz}",
+                " {mark} {:>2}. {:<title_width$}{}{quiz}",
                 number,
                 lesson.title,
                 ui::paint(lesson.id, Style::Dim)
@@ -354,7 +360,7 @@ fn quiz_command(
                     Style::Title
                 )
             );
-            let outcome = quiz::run(&questions, console);
+            let outcome = quiz::run(&questions, console, Some(&mut Rng::from_entropy()));
             report(outcome.correct, outcome.answered);
         }
         Some(query) => {
@@ -374,7 +380,7 @@ fn quiz_command(
 }
 
 fn take_quiz(id: &str, questions: &[&Question], progress: &mut Progress, console: &mut Console) {
-    let outcome = quiz::run(questions, console);
+    let outcome = quiz::run(questions, console, Some(&mut Rng::from_entropy()));
     report(outcome.correct, outcome.answered);
     if !outcome.quit && outcome.answered > 0 {
         progress.record_quiz(id, outcome.correct, outcome.answered);
