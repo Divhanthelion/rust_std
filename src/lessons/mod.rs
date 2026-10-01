@@ -25,6 +25,7 @@
     clippy::to_string_in_format_args,
     clippy::type_complexity,
     clippy::unnecessary_fold,
+    clippy::unnecessary_fallible_conversions,
     clippy::unnecessary_lazy_evaluations,
     clippy::unnecessary_literal_unwrap,
     clippy::unnecessary_min_or_max,
@@ -36,7 +37,9 @@
 
 use crate::lesson::{Lesson, Part};
 
+mod advanced_types;
 mod aggregates;
+mod async_rust;
 mod atomics;
 mod bindings;
 mod borrowing;
@@ -50,6 +53,7 @@ mod hello;
 mod io;
 mod iterators;
 mod lifetimes;
+mod macros;
 mod modules;
 mod numbers;
 mod option_result;
@@ -60,6 +64,7 @@ mod std_tour;
 mod std_traits;
 mod strings;
 mod structs;
+mod testing;
 mod threads;
 mod traits;
 
@@ -113,6 +118,15 @@ pub static PARTS: &[Part] = &[
             &atomics::LESSON,
             &io::LESSON,
             &std_tour::LESSON,
+        ],
+    },
+    Part {
+        title: "Part VI — Advanced Rust",
+        lessons: &[
+            &macros::LESSON,
+            &testing::LESSON,
+            &advanced_types::LESSON,
+            &async_rust::LESSON,
         ],
     },
 ];
