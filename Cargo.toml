@@ -1,0 +1,14 @@
+[package]
+name = "rust_std"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "Learn Rust using nothing but the standard library — an interactive CLI course."
+publish = false
+readme = "README.md"
+
+# Deliberately empty: everything in this course is built on `std` alone.
+[dependencies]
+
+[profile.release]
+opt-level = 3

@@ -1,0 +1,804 @@
+//! Lesson: Capstone — a signal gateway.
+
+use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::thread::{self, JoinHandle};
+
+use super::bytes_bits::crc8_sae_j1850;
+use super::can_frames::{CanFrame, CanId, FrameError};
+use super::fixed_capacity::{Overflow, Ring};
+use crate::alloc_counter;
+use crate::lesson::{Lesson, Question, Section};
+use crate::rng::Rng;
+
+pub static LESSON: Lesson = Lesson {
+    id: "capstone",
+    title: "Capstone: a signal gateway",
+    summary: "Everything together: parse a CAN capture, verify E2E protection, decode and plausibility-check signals, fan out over threads to a dashboard and a bounded log, behind a typestate API that never panics.",
+    source: include_str!("capstone.rs"),
+    sections: &[
+        Section::new(
+            "The brief",
+            r#"
+            A **gateway** ECU reads raw CAN traffic and turns it into trusted,
+            physical signals for other subsystems. Ours:
+
+            ```text
+                 capture lines
+                      │  feed()
+                      ▼
+            ┌──────────────────┐ sync_channel   ┌─────────────────────────────┐
+            │ ingest thread    │ ─────────────► │ decode thread                │
+            │ parse_line()     │  (backpressure)│ E2E check · signal table ·   │
+            │ count bad lines  │                │ plausibility · publish       │
+            └──────────────────┘                └──────────┬──────────────────┘
+                                                try_send   │   (never blocks)
+                                          ┌────────────────┴──────────────┐
+                                          ▼                               ▼
+                                 dashboard thread                 logger thread
+                                 latest value per signal          Ring<_, 6>: last six
+            ```
+
+            It reuses pieces built earlier: `CanFrame` and its parser (Lesson
+            32), the CRC-8 (Lesson 31), the ring buffer (Lesson 33), the
+            typestate pattern (Lesson 34), and the threading patterns (Lessons
+            23 and 38). New code joins them under one rule: **no input can
+            make it panic**.
+            "#,
+        ),
+        Section::new(
+            "Step 1: parsing capture lines",
+            r#"
+            Lines look like `candump -l` output: `(12.345) can0 1A0#…`. The
+            parser is a straight line of `?`: strip the parenthesis, split the
+            timestamp, convert seconds to milliseconds with checked arithmetic,
+            and delegate the frame to `CanFrame::from_str`. Each failure maps to
+            a `LineError` variant. A gateway counts bad lines; it doesn't crash
+            on them.
+            "#,
+        )
+        .demo("parse", parse_demo),
+        Section::new(
+            "Step 2: the signal table",
+            r#"
+            Signals are **data**, not code: a `static` table of definitions (id,
+            bit position, scaling, valid range, maximum change per frame). The
+            table is validated once, when the gateway is configured. Every
+            signal must fit in 8 bytes, and every range must be sane. After
+            that, decoding can't hit a layout error. Decoding writes into a
+            caller-provided fixed array, so the hot path **allocates nothing**,
+            and the last step measures exactly that.
+            "#,
+        )
+        .demo("table", table_demo),
+        Section::new(
+            "Step 3: E2E protection and plausibility",
+            r#"
+            Frame 0x1A0 carries vehicle speed with end-to-end protection: byte 0
+            holds a CRC-8 over an implicit data ID, the counter and the payload,
+            and byte 1 holds a 4-bit alive counter (Lesson 39). A failed check
+            discards the whole frame. Each decoded value then passes range and
+            rate-of-change checks, and gets a `Quality`. Consumers see **both**
+            value and quality, so nothing downstream mistakes a suspicious
+            value for a good one.
+            "#,
+        )
+        .demo("protect", protect_demo),
+        Section::new(
+            "Step 4: a typestate lifecycle",
+            r#"
+            The public API is a typestate. `Gateway::configure(table)` validates
+            and returns `Gateway<Configured>`. `.start()` spawns the threads
+            and returns `Gateway<Running>`, which is the only state with
+            `feed()`. `.shutdown()` consumes it, closes the channels, joins every
+            thread, and returns a `Report`. You can't feed a gateway that isn't
+            running, and you can't forget to join its threads, because there's
+            no other way to get the report.
+            "#,
+        )
+        .code("gateway"),
+        Section::new(
+            "Step 5: run it",
+            r#"
+            The capture below is generated by the demo itself, using the same
+            encoder the tests use, so it contains valid E2E frames. Then
+            faults are mixed in: a corrupted CRC, a repeated counter, an
+            implausible speed jump, a malformed line, and an id the table
+            doesn't know. Read the report against the capture. Every fault is
+            detected, counted, and **contained**.
+            "#,
+        )
+        .demo("run", run_demo),
+        Section::new(
+            "Step 6: evidence",
+            r#"
+            Claims need evidence. Two quick checks:
+
+            - **robustness**: thousands of random and mutated capture lines go
+              through `parse_line` and the decoder under `catch_unwind`, and
+              the panic count must be zero;
+            - **allocation-freedom**: decoding a frame is measured with the
+              counting allocator, and the count must be zero.
+
+            In a real project these are tests (Lesson 28) that run in CI on
+            every change, alongside requirement-traced unit tests (Lesson 39).
+            "#,
+        )
+        .demo("evidence", evidence_demo),
+    ],
+    quiz: &[
+        Question::new(
+            "Why does the ingest → decode channel use blocking `send` while decode → subscribers uses `try_send`?",
+            &[
+                "No reason",
+                "Upstream, losing frames is worse than waiting (backpressure); downstream, a slow consumer must never stall decoding",
+                "try_send is faster",
+                "send can't be used across threads",
+            ],
+            1,
+            "Each boundary picks a full-queue policy deliberately: no silent loss on input, freedom from interference on output.",
+        ),
+        Question::new(
+            "What does `Gateway<Running>::shutdown(self)` guarantee by taking `self` by value?",
+            &[
+                "Nothing",
+                "The running gateway can't be used afterwards, and the only way to get the report is to join all threads",
+                "It runs faster",
+                "It makes the gateway Send",
+            ],
+            1,
+            "Consuming the state ends its lifetime; the API makes the clean-shutdown path the only path.",
+        ),
+        Question::new(
+            "Why validate the signal table in `configure` instead of during decoding?",
+            &[
+                "It's faster to write",
+                "Configuration errors are caught once at start-up, so the hot path can't fail on layout",
+                "Validation needs threads",
+                "It's required by CAN",
+            ],
+            1,
+            "Parse, don't validate: once the table is accepted, decoding relies on its invariants.",
+        ),
+        Question::new(
+            "A measurement arrives with `Quality::Implausible`. What should a consumer do?",
+            &[
+                "Use it anyway",
+                "Treat it as not trustworthy: keep the last good value, degrade, or report — never act on it as valid",
+                "Panic",
+                "Retry the frame",
+            ],
+            1,
+            "Carrying quality alongside value forces downstream code to make a deliberate decision.",
+        ),
+    ],
+    exercises: &[
+        "Add a second protected message (e.g. brake pressure on 0x1B0) with its own data ID, and extend the report.",
+        "Shrink the logger's channel to capacity 1 and slow the logger thread down. Observe and explain the drop counters.",
+        "Add a fault manager that turns repeated E2E errors into a 'speed signal lost' event after three consecutive failures (debouncing), and heals after five good frames.",
+        "Replace the generated capture with a real `candump -l` file read from disk (Lesson 25), streaming it line by line with `BufRead`.",
+        "Write tests: one per `LineError` variant, golden vectors for each signal, and a test asserting zero allocations in `decode`.",
+    ],
+};
+
+// ─── Step 1: parsing ──────────────────────────────────────────────────────
+
+// ANCHOR: parse
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Stamped {
+    pub t_ms: u64,
+    pub frame: CanFrame,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineError {
+    Format,
+    Timestamp,
+    Frame(FrameError),
+}
+
+/// Parses `(seconds.fraction) interface ID#DATA`.
+pub fn parse_line(line: &str) -> Result<Stamped, LineError> {
+    let rest = line.trim().strip_prefix('(').ok_or(LineError::Format)?;
+    let (stamp, rest) = rest.split_once(')').ok_or(LineError::Format)?;
+    let mut fields = rest.split_whitespace();
+    let (Some(_interface), Some(frame_text), None) = (fields.next(), fields.next(), fields.next())
+    else {
+        return Err(LineError::Format);
+    };
+    let t_ms = seconds_to_ms(stamp).ok_or(LineError::Timestamp)?;
+    let frame = frame_text.parse().map_err(LineError::Frame)?;
+    Ok(Stamped { t_ms, frame })
+}
+
+fn seconds_to_ms(text: &str) -> Option<u64> {
+    let (secs, frac) = text.split_once('.').unwrap_or((text, "0"));
+    if frac.is_empty() || !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let secs: u64 = secs.parse().ok()?;
+    // Take up to three fractional digits as milliseconds: "5" → 500, "345678" → 345.
+    let millis = frac
+        .bytes()
+        .chain(std::iter::repeat(b'0'))
+        .take(3)
+        .fold(0u64, |acc, b| acc * 10 + u64::from(b - b'0'));
+    secs.checked_mul(1000)?.checked_add(millis)
+}
+// ANCHOR_END: parse
+
+fn parse_demo() {
+    for line in [
+        "(12.345) can0 0C0#80327A",
+        "(3) can0 0C0#00",
+        "(1.5x) can0 0C0#00",
+        "12.0 can0 0C0#00",
+        "(1.0) can0 0C0#0G",
+        "(1.0) can0",
+    ] {
+        println!(
+            "{line:<26} → {:?}",
+            parse_line(line).map(|s| (s.t_ms, s.frame.to_string()))
+        );
+    }
+}
+
+// ─── Step 2: the signal table ─────────────────────────────────────────────
+
+// ANCHOR: table
+#[derive(Debug)]
+pub struct SignalDef {
+    pub name: &'static str,
+    pub id: u16,
+    pub start: u32, // Intel byte order (LSB position)
+    pub len: u32,
+    pub factor: f64,
+    pub offset: f64,
+    pub min: f64,
+    pub max: f64,
+    pub max_step: f64, // largest plausible change between two frames
+    pub unit: &'static str,
+}
+
+pub static SIGNALS: [SignalDef; 3] = [
+    SignalDef {
+        name: "engine_speed",
+        id: 0x0C0,
+        start: 0,
+        len: 16,
+        factor: 0.25,
+        offset: 0.0,
+        min: 0.0,
+        max: 8000.0,
+        max_step: 2000.0,
+        unit: "rpm",
+    },
+    SignalDef {
+        name: "coolant_temp",
+        id: 0x0C0,
+        start: 16,
+        len: 8,
+        factor: 1.0,
+        offset: -40.0,
+        min: -40.0,
+        max: 150.0,
+        max_step: 5.0,
+        unit: "°C",
+    },
+    SignalDef {
+        name: "vehicle_speed",
+        id: 0x1A0,
+        start: 16,
+        len: 16,
+        factor: 0.01,
+        offset: 0.0,
+        min: 0.0,
+        max: 300.0,
+        max_step: 5.0,
+        unit: "km/h",
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Quality {
+    Valid,
+    OutOfRange,
+    Implausible,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Measurement {
+    pub t_ms: u64,
+    pub signal: usize, // index into the table
+    pub value: f64,
+    pub quality: Quality,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ConfigError {
+    Layout(&'static str),
+    Range(&'static str),
+}
+
+pub fn validate(table: &[SignalDef]) -> Result<(), ConfigError> {
+    for s in table {
+        if s.len == 0 || s.len > 32 || s.start + s.len > 64 {
+            return Err(ConfigError::Layout(s.name));
+        }
+        if !(s.min < s.max && s.factor > 0.0 && s.max_step > 0.0) {
+            return Err(ConfigError::Range(s.name));
+        }
+    }
+    Ok(())
+}
+
+/// Decodes every signal carried by `frame` into `out`; returns how many.
+/// Allocation-free, and total: unknown ids simply produce zero measurements.
+pub fn decode(
+    table: &[SignalDef],
+    t_ms: u64,
+    frame: &CanFrame,
+    out: &mut [Option<Measurement>; 4],
+) -> usize {
+    let CanId::Standard(id) = frame.id() else {
+        return 0;
+    };
+    let word = u64::from_le_bytes(*frame.padded());
+    let mut n = 0;
+    for (index, s) in table.iter().enumerate().filter(|(_, s)| s.id == id) {
+        let Some(slot) = out.get_mut(n) else { break };
+        let raw = (word >> s.start) & ((1u64 << s.len) - 1); // valid: table was validated
+        let value = raw as f64 * s.factor + s.offset;
+        let quality = if (s.min..=s.max).contains(&value) {
+            Quality::Valid
+        } else {
+            Quality::OutOfRange
+        };
+        *slot = Some(Measurement {
+            t_ms,
+            signal: index,
+            value,
+            quality,
+        });
+        n += 1;
+    }
+    n
+}
+// ANCHOR_END: table
+
+fn table_demo() {
+    println!("table valid: {:?}", validate(&SIGNALS));
+    let bad = [SignalDef {
+        name: "broken",
+        start: 60,
+        len: 16,
+        ..SIGNALS[0]
+    }];
+    println!("bad table:   {:?}", validate(&bad));
+
+    let frame: CanFrame = "0C0#80327A".parse().expect("valid frame");
+    let mut out = [None; 4];
+    let n = decode(&SIGNALS, 1000, &frame, &mut out);
+    for m in out.iter().take(n).flatten() {
+        let s = &SIGNALS[m.signal];
+        println!(
+            "{:<14} {:>8.2} {:<5} {:?}",
+            s.name, m.value, s.unit, m.quality
+        );
+    }
+}
+
+// ─── Step 3: protection ───────────────────────────────────────────────────
+
+// ANCHOR: protect
+const SPEED_DATA_ID: u16 = 0x0A1;
+
+fn e2e_crc(data_id: u16, counter_and_payload: &[u8]) -> u8 {
+    let mut buf = [0u8; 9];
+    buf[..2].copy_from_slice(&data_id.to_le_bytes());
+    let n = counter_and_payload.len().min(7);
+    buf[2..2 + n].copy_from_slice(&counter_and_payload[..n]);
+    crc8_sae_j1850(&buf[..2 + n])
+}
+
+/// Encodes a protected speed frame (also used to generate test captures).
+pub fn speed_frame(counter: u8, kmh: f64) -> CanFrame {
+    let raw = (kmh / 0.01).round().clamp(0.0, 65535.0) as u16;
+    let mut data = [0u8; 4];
+    data[1] = counter & 0x0F;
+    data[2..4].copy_from_slice(&raw.to_le_bytes());
+    data[0] = e2e_crc(SPEED_DATA_ID, &data[1..]);
+    CanFrame::new(CanId::Standard(0x1A0), &data).expect("4 bytes always fit")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum E2e {
+    Ok,
+    BadCrc,
+    Repeated,
+    Lost(u8),
+}
+
+pub fn check_e2e(frame: &CanFrame, last_counter: &mut Option<u8>) -> E2e {
+    let [crc, counter_byte, ..] = *frame.padded();
+    if frame.data().len() < 2 || e2e_crc(SPEED_DATA_ID, frame.data().get(1..).unwrap_or(&[])) != crc
+    {
+        return E2e::BadCrc;
+    }
+    let counter = counter_byte & 0x0F;
+    let status = match last_counter.map(|last| counter.wrapping_sub(last) & 0x0F) {
+        None | Some(1) => E2e::Ok,
+        Some(0) => return E2e::Repeated, // don't advance on a repeat
+        Some(gap) => E2e::Lost(gap - 1),
+    };
+    *last_counter = Some(counter);
+    status
+}
+
+/// Rate-of-change check with memory of the last valid value per signal.
+pub struct Plausibility {
+    last: [Option<f64>; 8],
+}
+
+impl Plausibility {
+    pub fn new() -> Self {
+        Plausibility { last: [None; 8] }
+    }
+    pub fn check(&mut self, table: &[SignalDef], m: &mut Measurement) {
+        let (Some(def), Some(last)) = (table.get(m.signal), self.last.get_mut(m.signal)) else {
+            return;
+        };
+        if m.quality != Quality::Valid {
+            return;
+        }
+        if let Some(prev) = *last
+            && (m.value - prev).abs() > def.max_step
+        {
+            m.quality = Quality::Implausible; // keep `last` at the previous good value
+            return;
+        }
+        *last = Some(m.value);
+    }
+}
+// ANCHOR_END: protect
+
+fn protect_demo() {
+    let mut last = None;
+    let good = speed_frame(7, 88.5);
+    println!("{good} → {:?}", check_e2e(&good, &mut last));
+    println!("{good} again → {:?}", check_e2e(&good, &mut last));
+    let mut bytes = *good.padded();
+    bytes[3] ^= 0x01; // flip a payload bit
+    let tampered = CanFrame::new(good.id(), &bytes[..4]).expect("4 bytes");
+    println!("{tampered} → {:?}", check_e2e(&tampered, &mut last));
+    let skipped = speed_frame(10, 88.7);
+    println!("{skipped} → {:?}", check_e2e(&skipped, &mut last));
+
+    let mut p = Plausibility::new();
+    for v in [88.5, 89.0, 120.0, 89.4] {
+        let mut m = Measurement {
+            t_ms: 0,
+            signal: 2,
+            value: v,
+            quality: Quality::Valid,
+        };
+        p.check(&SIGNALS, &mut m);
+        println!("speed {v:>5} → {:?}", m.quality);
+    }
+}
+
+// ─── Step 4: the gateway ──────────────────────────────────────────────────
+
+// ANCHOR: gateway
+pub struct Configured {
+    table: &'static [SignalDef],
+}
+
+pub struct Running {
+    input: SyncSender<String>,
+    workers: Vec<JoinHandle<()>>,
+    dashboard: JoinHandle<BTreeMap<usize, Measurement>>,
+    logger: JoinHandle<Vec<Measurement>>,
+    stats: Arc<Stats>,
+    table: &'static [SignalDef],
+}
+
+pub struct Gateway<S> {
+    state: S,
+}
+
+#[derive(Default)]
+pub struct Stats {
+    lines: AtomicU32,
+    bad_lines: AtomicU32,
+    unknown_ids: AtomicU32,
+    e2e_errors: AtomicU32,
+    measurements: AtomicU32,
+    implausible: AtomicU32,
+    dashboard_drops: AtomicU32,
+    logger_drops: AtomicU32,
+}
+
+impl Gateway<Configured> {
+    pub fn configure(table: &'static [SignalDef]) -> Result<Self, ConfigError> {
+        validate(table)?; // reject a bad table before anything runs
+        Ok(Gateway {
+            state: Configured { table },
+        })
+    }
+
+    pub fn start(self) -> Gateway<Running> {
+        let table = self.state.table;
+        let stats = Arc::new(Stats::default());
+        let (input, lines) = mpsc::sync_channel::<String>(32);
+        let (frames_tx, frames) = mpsc::sync_channel::<Stamped>(32);
+        let (dash_tx, dash_rx) = mpsc::sync_channel::<Measurement>(64);
+        let (log_tx, log_rx) = mpsc::sync_channel::<Measurement>(64);
+
+        let ingest = {
+            let stats = Arc::clone(&stats);
+            thread::spawn(move || {
+                for line in lines {
+                    stats.lines.fetch_add(1, Ordering::Relaxed);
+                    match parse_line(&line) {
+                        Ok(stamped) => {
+                            if frames_tx.send(stamped).is_err() {
+                                break; // decoder gone
+                            }
+                        }
+                        Err(_) => {
+                            stats.bad_lines.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+            })
+        };
+
+        let decoder = {
+            let stats = Arc::clone(&stats);
+            thread::spawn(move || decode_loop(table, frames, &stats, &dash_tx, &log_tx))
+        };
+
+        let dashboard = thread::spawn(move || dashboard_loop(dash_rx));
+        let logger = thread::spawn(move || logger_loop(log_rx));
+
+        Gateway {
+            state: Running {
+                input,
+                workers: vec![ingest, decoder],
+                dashboard,
+                logger,
+                stats,
+                table,
+            },
+        }
+    }
+}
+
+impl Gateway<Running> {
+    /// Feeds one capture line. Blocks briefly if the gateway is busy.
+    pub fn feed(&self, line: &str) {
+        let _ = self.state.input.send(line.to_string());
+    }
+
+    /// Closes the input, joins every thread, and reports.
+    pub fn shutdown(self) -> Report {
+        let Running {
+            input,
+            workers,
+            dashboard,
+            logger,
+            stats,
+            table,
+        } = self.state;
+        drop(input); // ends ingest → ends decode → ends the subscribers
+        let mut healthy = true;
+        for w in workers {
+            healthy &= w.join().is_ok();
+        }
+        let latest = dashboard.join().unwrap_or_default();
+        let log = logger.join().unwrap_or_default();
+        Report {
+            table,
+            stats,
+            latest,
+            log,
+            healthy,
+        }
+    }
+}
+
+fn decode_loop(
+    table: &'static [SignalDef],
+    frames: Receiver<Stamped>,
+    stats: &Stats,
+    dash: &SyncSender<Measurement>,
+    log: &SyncSender<Measurement>,
+) {
+    let mut plausibility = Plausibility::new();
+    let mut last_counter = None;
+    for Stamped { t_ms, frame } in frames {
+        if frame.id() == CanId::Standard(0x1A0)
+            && !matches!(check_e2e(&frame, &mut last_counter), E2e::Ok | E2e::Lost(_))
+        {
+            stats.e2e_errors.fetch_add(1, Ordering::Relaxed);
+            continue; // never decode an unprotected or replayed frame
+        }
+        let mut out = [None; 4];
+        let n = decode(table, t_ms, &frame, &mut out);
+        if n == 0 {
+            stats.unknown_ids.fetch_add(1, Ordering::Relaxed);
+        }
+        for mut m in out.into_iter().take(n).flatten() {
+            plausibility.check(table, &mut m);
+            if m.quality != Quality::Valid {
+                stats.implausible.fetch_add(1, Ordering::Relaxed);
+            }
+            stats.measurements.fetch_add(1, Ordering::Relaxed);
+            if dash.try_send(m).is_err() {
+                stats.dashboard_drops.fetch_add(1, Ordering::Relaxed);
+            }
+            if log.try_send(m).is_err() {
+                stats.logger_drops.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+fn dashboard_loop(rx: Receiver<Measurement>) -> BTreeMap<usize, Measurement> {
+    let mut latest = BTreeMap::new(); // deterministic order for the report
+    for m in rx {
+        latest.insert(m.signal, m);
+    }
+    latest
+}
+
+fn logger_loop(rx: Receiver<Measurement>) -> Vec<Measurement> {
+    let mut ring: Ring<Measurement, 6> = Ring::new(Overflow::OverwriteOldest);
+    for m in rx {
+        let _ = ring.push(m); // overwrite-oldest never fails
+    }
+    ring.iter().copied().collect()
+}
+
+pub struct Report {
+    table: &'static [SignalDef],
+    stats: Arc<Stats>,
+    latest: BTreeMap<usize, Measurement>,
+    log: Vec<Measurement>,
+    healthy: bool,
+}
+
+impl fmt::Display for Report {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = &self.stats;
+        let get = |c: &AtomicU32| c.load(Ordering::Relaxed);
+        writeln!(
+            f,
+            "lines {}  bad {}  unknown ids {}  e2e errors {}",
+            get(&s.lines),
+            get(&s.bad_lines),
+            get(&s.unknown_ids),
+            get(&s.e2e_errors)
+        )?;
+        writeln!(
+            f,
+            "measurements {}  flagged {}  drops: dashboard {} logger {}",
+            get(&s.measurements),
+            get(&s.implausible),
+            get(&s.dashboard_drops),
+            get(&s.logger_drops)
+        )?;
+        writeln!(f, "threads joined cleanly: {}", self.healthy)?;
+        writeln!(f, "latest values:")?;
+        for (index, m) in &self.latest {
+            if let Some(def) = self.table.get(*index) {
+                writeln!(
+                    f,
+                    "  {:<14} {:>8.2} {:<5} {:?} @ {} ms",
+                    def.name, m.value, def.unit, m.quality, m.t_ms
+                )?;
+            }
+        }
+        writeln!(f, "last {} log entries:", self.log.len())?;
+        for m in &self.log {
+            let name = self.table.get(m.signal).map_or("?", |d| d.name);
+            writeln!(
+                f,
+                "  {:>6} ms  {:<14} {:>8.2}  {:?}",
+                m.t_ms, name, m.value, m.quality
+            )?;
+        }
+        Ok(())
+    }
+}
+// ANCHOR_END: gateway
+
+// ─── Steps 5 and 6 ────────────────────────────────────────────────────────
+
+/// A capture with good traffic and a fault of every kind mixed in.
+fn sample_capture() -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut t = 0u64;
+    let mut push =
+        |frame: String, t: u64| lines.push(format!("({}.{:03}) can0 {frame}", t / 1000, t % 1000));
+    let speeds = [50.0, 51.2, 52.5, 53.1, 120.0, 54.0, 54.6];
+    for (i, kmh) in speeds.iter().enumerate() {
+        t += 10;
+        let rpm_raw = ((1800.0 + i as f64 * 50.0) / 0.25) as u16;
+        let [lo, hi] = rpm_raw.to_le_bytes();
+        push(format!("0C0#{lo:02X}{hi:02X}{:02X}", 88 + 40), t); //          engine frame
+        push(speed_frame(i as u8, *kmh).to_string(), t + 1); //                 protected speed
+    }
+    push(speed_frame(6, 54.6).to_string(), t + 5); //                          repeated counter
+    let mut corrupted = speed_frame(7, 55.0).to_string();
+    corrupted.replace_range(corrupted.len() - 1.., "0"); //                    damaged byte
+    push(corrupted, t + 8);
+    push("7E8#03410D3C".to_string(), t + 9); //                                not in our table
+    lines.push("(garbage line".to_string()); //                                 malformed
+    lines
+}
+
+fn run_demo() {
+    // ANCHOR: run
+    let capture = sample_capture();
+    for line in capture.iter().take(4) {
+        println!("  {line}");
+    }
+    println!("  … {} lines in total\n", capture.len());
+
+    let gateway = match Gateway::configure(&SIGNALS) {
+        Ok(g) => g.start(),
+        Err(e) => {
+            println!("configuration rejected: {e:?}");
+            return;
+        }
+    };
+    for line in &capture {
+        gateway.feed(line);
+    }
+    print!("{}", gateway.shutdown());
+    // ANCHOR_END: run
+}
+
+fn evidence_demo() {
+    // ANCHOR: evidence
+    use std::panic;
+
+    // 1. Robustness: random and mutated lines never panic.
+    let previous = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    let seeds = sample_capture();
+    let mut rng = Rng::new(0xCAB);
+    let mut panics = 0;
+    for _ in 0..20_000 {
+        let mut line = seeds[rng.below(seeds.len())].clone().into_bytes();
+        for _ in 0..rng.below(4) {
+            let i = rng.below(line.len().max(1));
+            if let Some(b) = line.get_mut(i) {
+                *b = b"0123456789ABCDEF#().x "[rng.below(22)];
+            }
+        }
+        let text = String::from_utf8_lossy(&line).into_owned();
+        let result = panic::catch_unwind(|| {
+            if let Ok(s) = parse_line(&text) {
+                let mut out = [None; 4];
+                let _ = decode(&SIGNALS, s.t_ms, &s.frame, &mut out);
+                let _ = check_e2e(&s.frame, &mut None);
+            }
+        });
+        panics += usize::from(result.is_err());
+    }
+    panic::set_hook(previous);
+    println!("20000 mutated lines → panics: {panics}");
+
+    // 2. Allocation-freedom of the decode hot path.
+    let frame: CanFrame = "0C0#80327A".parse().expect("valid");
+    let mut out = [None; 4];
+    let (n, allocations) = alloc_counter::count(|| decode(&SIGNALS, 0, &frame, &mut out));
+    println!("decode produced {n} measurements with {allocations} heap allocations");
+    // ANCHOR_END: evidence
+}
