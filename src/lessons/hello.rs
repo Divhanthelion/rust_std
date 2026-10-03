@@ -72,6 +72,15 @@ pub static LESSON: Lesson = Lesson {
             implement `Debug`: there is no single "user-friendly" way to show a
             list, so Rust doesn't guess. Your own types get `Debug` from one
             line, `#[derive(Debug)]`. `Display` you write yourself (Lesson 17).
+
+            Watch the first two lines of output. In the source, `\t` is an
+            **escape sequence**: two keystrokes that stand for **one** tab
+            character, so the string holds `tab`, a tab, then `here`.
+            `Display` prints that tab as-is, and your terminal shows it as a
+            gap. `Debug` prints the string the way you'd write it in code,
+            with quotes and the escape spelled out. Hidden characters become
+            visible, which is exactly what you want while debugging. (Escapes
+            are covered in section 7.)
             "#,
         )
         .demo("display_debug", display_vs_debug),
@@ -281,7 +290,7 @@ struct Sensor {
 }
 
 fn display_vs_debug() {
-    let text = "tab\there";
+    let text = "tab\there"; // `\t` is one TAB character, not a backslash and a `t`
     println!("Display: {}", text);
     println!("Debug:   {:?}", text); // quotes and escapes shown
 
