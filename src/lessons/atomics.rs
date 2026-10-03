@@ -44,7 +44,8 @@ pub static LESSON: Lesson = Lesson {
             current value equals `expected`, and otherwise reports the actual
             value. Any lock-free algorithm can be built from it.
             `compare_exchange_weak` may fail spuriously, but is cheaper inside
-            a retry loop. `fetch_update` packages that loop around a closure.
+            a retry loop. `try_update` (named `fetch_update` before Rust 1.95)
+            packages that loop around a closure.
             "#,
         )
         .demo("rmw", read_modify_write),
@@ -263,10 +264,10 @@ fn read_modify_write() {
         }
     }
 
-    // fetch_update: a CAS loop around a closure (here: saturating decrement)
+    // try_update: a CAS loop around a closure (here: saturating decrement)
     let credits = AtomicU32::new(1);
     for _ in 0..2 {
-        let r = credits.fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| c.checked_sub(1));
+        let r = credits.try_update(Ordering::AcqRel, Ordering::Acquire, |c| c.checked_sub(1));
         println!("take credit → {r:?}");
     }
     // ANCHOR_END: rmw
